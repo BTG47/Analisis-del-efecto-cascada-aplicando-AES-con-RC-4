@@ -124,3 +124,32 @@ Verificados contra `cryptography 45.0.7` antes de escribir los tests.
 
 - Los archivos de práctica entran en memoria (sin streaming).
 - El equipo usa el mismo intérprete con `cryptography` instalada.
+
+## 11. Evidencia de ejecución (2026-11-03)
+
+Suite completa:
+
+```
+python -m pytest -q
+95 passed in 0.25s
+```
+
+Distribución: 22 de padding, 5 de vectores oficiales, 18 de API pública,
+20 de ruta raw y 15 de la CLI.
+
+Prueba end-to-end con un archivo binario aleatorio de 1.000.000 bytes:
+
+| Etapa | Bytes | Resultado |
+|---|---|---|
+| original | 1.000.000 | — |
+| cifrado | 1.000.016 | +16 bytes (0,0016 %) |
+| descifrado | 1.000.000 | `cmp` idéntico al original |
+
+Verificación de integridad: `sha256_destino` de `encrypt` coincide con
+`sha256_origen` de `decrypt`, y viceversa. La salida completa está en el README.
+
+Verificación independiente de la suite (200 casos aleatorios, longitudes 0–1000,
+claves nuevas): round-trip exacto, fórmula de tamaño correcta y
+`aes_encrypt(x) == aes_encrypt_raw(pkcs7_pad(x))`. Una clave de 16 bytes se
+rechaza con `ValueError` (sin esa validación, `cryptography` habría usado
+AES-128 en silencio).
