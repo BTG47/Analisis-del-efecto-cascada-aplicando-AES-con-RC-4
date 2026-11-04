@@ -2,7 +2,7 @@
 
 import pytest
 
-from padding import BLOCK_SIZE, pkcs7_pad, pkcs7_unpad
+from padding import BLOCK_SIZE, MAX_BLOCK_SIZE, pkcs7_pad, pkcs7_unpad
 
 
 def test_block_size_es_16():
@@ -66,3 +66,25 @@ def test_rechaza_texto():
 
 def test_acepta_bytearray():
     assert pkcs7_unpad(pkcs7_pad(bytearray(b"hola"))) == b"hola"
+
+
+def test_unpad_rechaza_block_size_cero():
+    """Sin la validación, ``len(data) % 0`` lanzaría ZeroDivisionError."""
+    with pytest.raises(ValueError):
+        pkcs7_unpad(b"\x10" * 16, 0)
+
+
+def test_unpad_rechaza_block_size_mayor_que_255():
+    """PKCS#7 guarda el largo del relleno en un byte: 256 no es válido.
+
+    Con datos alineados a ese tamaño, la versión sin validar devolvía bytes en
+    silencio en lugar de rechazar el block_size.
+    """
+    with pytest.raises(ValueError):
+        pkcs7_unpad(b"\x01" * 256, 256)
+
+
+@pytest.mark.parametrize("modulo", [pkcs7_pad, pkcs7_unpad])
+def test_block_size_debe_ser_entero(modulo):
+    with pytest.raises(TypeError):
+        modulo(b"\x10" * 16, "16")

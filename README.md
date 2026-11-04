@@ -1,17 +1,17 @@
-# AES-256 y cascada AES-RC4 — módulo de Bruno
+# AES-256 y cascada AES-RC4
 
-Componente AES del trabajo práctico basado en *AES-RC4 Encryption Technique to
-Improve File Security* (Atikah et al., 2019).
+Trabajo práctico basado en *AES-RC4 Encryption Technique to Improve File
+Security* (Atikah et al., 2019).
 
-Este repositorio contiene **la parte de Bruno**: cifrado y descifrado
+Este repositorio contiene la implementación del equipo: cifrado y descifrado
 AES-256-ECB sobre `bytes`, con padding PKCS#7, una ruta sin padding para los
-experimentos de Avalanche Effect y la cascada AES-RC4 que compone los módulos
-del equipo. `rc4.py` e `integrity.py` son de José y se usan sin modificarlos;
-la medición del efecto avalancha es de Diego.
+experimentos de Avalanche Effect y la cascada AES-RC4. Los módulos de RC4 e
+integridad se usan sin modificarlos, y la medición del efecto avalancha
+corresponde a otra parte del trabajo.
 
 ## Estado
 
-Completo y verificado: **182 tests pasando**. Incluye vectores oficiales
+Completo y verificado: **186 tests pasando**. Incluye vectores oficiales
 FIPS-197 y NIST SP 800-38A para AES, vectores clásicos para RC4, round-trip con
 archivos binarios reales, cascada AES-RC4 y verificación de integridad por
 SHA-256 y BER.
@@ -61,6 +61,7 @@ from aes256 import (
     generate_key,
 )
 from hybrid import hybrid_encrypt, hybrid_decrypt, generate_rc4_key
+from rc4 import rc4_encrypt, rc4_decrypt
 
 ct = aes_encrypt(data, key)              # PKCS#7, cualquier longitud
 pt = aes_decrypt(ct, key)                # ValueError si el relleno no es válido
@@ -69,6 +70,9 @@ pt = aes_decrypt_raw(ct, key)            # ídem, para experimentos
 
 ct = hybrid_encrypt(data, aes_key, rc4_key)   # AES-256 y luego RC4
 pt = hybrid_decrypt(ct, aes_key, rc4_key)     # RC4 y luego AES
+
+ct = rc4_encrypt(data, rc4_key)          # misma longitud, sin padding
+pt = rc4_decrypt(ct, rc4_key)            # RC4 es simétrico
 
 key = generate_key()                     # 32 bytes de os.urandom
 rc4_key = generate_rc4_key(16)           # 1 a 256 bytes de os.urandom
@@ -86,6 +90,10 @@ entre **1 y 256**.
 | Criptograma truncado | `ValueError` |
 | Relleno PKCS#7 inválido (clave incorrecta o datos corruptos) | `ValueError` |
 
+Ese contrato es el de `aes256.py` y `hybrid.py`. `rc4.py` es más permisivo con la
+clave: codifica un `str` en UTF-8 y convierte un `int` con `bytes(key)`;
+`hybrid.py` lo restringe a `bytes` de 1 a 256.
+
 Tamaños:
 
 | Operación | Longitud de salida |
@@ -101,12 +109,12 @@ mismo que AES.
 ## Estructura
 
 ```
-aes256.py            # núcleo: AES-256-ECB y API pública (Bruno)
-padding.py           # PKCS#7 (pad / unpad validado) (Bruno)
-validation.py        # tipos y largo de clave (Bruno)
-hybrid.py            # cascada AES-RC4 (Bruno, compone los módulos del equipo)
-rc4.py               # RC4: KSA + PRGA + XOR (José)
-integrity.py         # BER, SHA-256 y comparación exacta (José)
+aes256.py            # núcleo: AES-256-ECB y API pública
+padding.py           # PKCS#7 (pad / unpad validado)
+validation.py        # tipos y largo de clave
+hybrid.py            # cascada AES-RC4; compone los módulos existentes
+rc4.py               # RC4: KSA + PRGA + XOR
+integrity.py         # BER, SHA-256 y comparación exacta
 scripts/file_cli.py  # cifra/descifra archivos y reporta tamaños + SHA-256
 tests/               # pytest: vectores, API, raw, cascada, RC4, integridad y CLI
 docs/DECISIONS.md    # decisiones, límites y evidencia de ejecución
@@ -141,6 +149,7 @@ python scripts/file_cli.py generate-rc4-key --size 16
 
 python scripts/file_cli.py encrypt  entrada.bin salida.aes --key-hex <64 hex>
 python scripts/file_cli.py rc4-encrypt entrada.bin salida.rc4 --key-hex <32 hex>
+python scripts/file_cli.py rc4-decrypt salida.rc4 recuperado.bin --key-hex <32 hex>
 python scripts/file_cli.py hybrid-encrypt entrada.bin salida.hyb \
     --aes-key-hex <64 hex> --rc4-key-hex <32 hex>
 
@@ -178,14 +187,14 @@ Tamaños de archivo, listos para la Tabla II del informe:
 ## Tests
 
 ```bash
-python -m pytest -q                                  # 182 passed
+python -m pytest -q                                  # 186 passed
 python -m pytest tests/test_aes_vectors.py -q        # solo vectores AES
 python -m pytest tests/test_hybrid.py -q             # solo la cascada
 ```
 
 | Archivo | Qué cubre |
 |---|---|
-| `test_padding.py` | PKCS#7: bordes y relleno inválido |
+| `test_padding.py` | PKCS#7: bordes, relleno inválido y `block_size` |
 | `test_aes_vectors.py` | FIPS-197 C.3 y NIST SP 800-38A F.1.5 |
 | `test_api.py` | round-trip 0–1 MB, determinismo, errores |
 | `test_raw.py` | ruta sin padding y coherencia entre capas |
@@ -196,7 +205,7 @@ python -m pytest tests/test_hybrid.py -q             # solo la cascada
 
 ## Integración con el equipo
 
-**Diego (Avalanche Effect).** Con una sola clave modificada, la cascada hereda
+**Avalanche Effect.** Con una sola clave modificada, la cascada hereda
 el efecto avalancha del cifrador cuya clave cambió; no lo amplifica:
 
 | Bit invertido | Relación | Medición (2.000 B) |
@@ -211,11 +220,11 @@ Conviene invertir un bit de la clave RC4 y discutir que la cascada no mejora la
 difusión, solo la conserva. `integrity.ber(c1, c2) * 100` es exactamente la
 ecuación (1) del enunciado, siempre que `|c1| == |c2|`.
 
-**José (RC4 e integridad).** `rc4.py` reproduce los tres vectores clásicos y se
-usa sin modificaciones. Una advertencia para su revisión: `_check_key` hace
-`bytes(key)`, así que `rc4_encrypt(data, 32)` acepta un `int` y usa una clave de
-32 ceros en silencio. `hybrid.py` lo bloquea en su frontera exigiendo `bytes`,
-pero el arreglo de fondo corresponde a su módulo.
+**RC4 e integridad.** `rc4.py` reproduce los tres vectores clásicos y se usa
+sin modificaciones. Una advertencia para la revisión del módulo: `_check_key`
+hace `bytes(key)`, así que `rc4_encrypt(data, 32)` acepta un `int` y usa una
+clave de 32 ceros en silencio. `hybrid.py` lo bloquea en su frontera exigiendo
+`bytes`, pero el arreglo de fondo corresponde a `rc4.py`.
 
 ## Advertencia
 

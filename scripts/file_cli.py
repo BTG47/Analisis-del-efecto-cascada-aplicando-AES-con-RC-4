@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Permite importar aes256 aunque el script se ejecute como scripts/file_cli.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -163,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "generate-key":

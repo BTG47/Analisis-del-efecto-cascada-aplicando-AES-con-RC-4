@@ -1,6 +1,6 @@
-# Decisiones de implementación — módulo AES (Bruno)
+# Decisiones de implementación — AES-256 y cascada AES-RC4
 
-Documento breve para el informe y para José y Diego. Todo lo que está acá fue
+Documento breve para el informe y el equipo. Todo lo que está acá fue
 decidido en conjunto; lo que no está, no está en el alcance.
 
 ## 1. Modo: AES-256-ECB sin IV
@@ -76,6 +76,7 @@ generate_key() -> bytes
 | Criptograma truncado / no múltiplo de 16 | `ValueError` |
 | Relleno PKCS#7 inválido | `ValueError` |
 | `rc4_key` fuera de 1–256 bytes (cascada) | `ValueError` |
+| `block_size` fuera de 1–255 en `pkcs7_pad` / `pkcs7_unpad` | `ValueError` |
 
 No se definen excepciones propias: los compañeros solo necesitan `ValueError`.
 
@@ -85,7 +86,7 @@ No se definen excepciones propias: los compañeros solo necesitan `ValueError`.
 relleno resultante suele ser inválido (~255 de cada 256 casos). Queda un caso
 en el que devuelve basura silenciosamente. Para integridad real haría falta
 HMAC o un modo AEAD; ambos fuera de alcance (la verificación de integridad es
-responsabilidad de José).
+responsabilidad del módulo de integridad).
 
 En `hybrid_decrypt` ocurre lo mismo: una `rc4_key` incorrecta produce basura de
 la longitud correcta y quien la descarta es la validación de PKCS#7 de AES. Por
@@ -113,7 +114,7 @@ generate_rc4_key(size=16) -> bytes
   key ni derivación.
 - `hybrid.py` valida la clave RC4 en su frontera porque `rc4.py` acepta un `int`
   y lo convierte con `bytes(key)`; un `32` se volvería una clave de 32 ceros en
-  silencio. El arreglo de fondo corresponde al módulo de José.
+  silencio. El arreglo de fondo corresponde al módulo de RC4.
 
 ### Efecto avalancha de la cascada
 
@@ -162,10 +163,10 @@ Suite completa:
 
 ```
 python -m pytest -q
-182 passed in 1.16s
+186 passed in 1.08s
 ```
 
-Distribución: 22 de padding, 5 de vectores AES, 24 de la API pública, 29 de la
+Distribución: 26 de padding, 5 de vectores AES, 24 de la API pública, 29 de la
 ruta raw, 30 de la CLI, 17 de vectores RC4, 17 de integridad y 38 de la cascada
 AES-RC4.
 
