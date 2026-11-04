@@ -25,7 +25,7 @@ from pathlib import Path
 # Permite importar aes256 aunque el script se ejecute como scripts/file_cli.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from aes256 import aes_decrypt, aes_encrypt, generate_key  # noqa: E402
+from aes256 import aes_decrypt, aes_encrypt, generate_key, KEY_SIZE  # noqa: E402
 
 
 def sha256(data: bytes) -> str:
@@ -35,25 +35,40 @@ def sha256(data: bytes) -> str:
 
 def encrypt_file(src: Path, dst: Path, key: bytes) -> dict:
     """Lee ``src``, cifra con PKCS#7, escribe ``dst`` y devuelve los datos del reporte."""
-    # TODO Misión 4
-    # - data = src.read_bytes()
-    # - cifrado = aes_encrypt(data, key)
-    # - dst.write_bytes(cifrado)
-    # - Devolver un dict con: archivo, tamano_origen, tamano_destino,
-    #   sha256_origen, sha256_destino.
-    raise NotImplementedError("Misión 4: encrypt_file")
+    data = src.read_bytes()
+
+    cifrado = aes_encrypt(data, key)
+
+    dst.write_bytes(cifrado)
+
+    return {"archivo": src, 
+            "tamano_origen":len(data), 
+            "tamano_destino":len(cifrado),
+            "sha256_origen": sha256(data), 
+            "sha256_destino": sha256(cifrado)}
 
 
 def decrypt_file(src: Path, dst: Path, key: bytes) -> dict:
     """Lee ``src``, descifra y escribe ``dst``. Mismo reporte que encrypt_file."""
     # TODO Misión 4
-    raise NotImplementedError("Misión 4: decrypt_file")
+
+    data = src.read_bytes()
+
+    plain_text = aes_decrypt(data, key)
+
+    dst.write_bytes(plain_text)
+
+    return {"archivo": src, 
+            "tamano_origen":len(data), 
+            "tamano_destino":len(plain_text),
+            "sha256_origen": sha256(data), 
+            "sha256_destino": sha256(plain_text)}
 
 
 def print_report(report: dict) -> None:
-    """Imprime el reporte en formato clave<TAB>valor."""
-    # TODO Misión 4: recorrer el dict e imprimir con formato alineado.
-    raise NotImplementedError("Misión 4: print_report")
+    """Imprime el reporte en formato clave: valor."""
+    for key, value in report.items():
+        print(f"{key}: {value}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,12 +92,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "generate-key":
         print(generate_key().hex())
         return 0
-
-    # TODO Misión 4
-    # - bytes.fromhex(args.key_hex) y validar que mida 32 bytes.
-    # - Llamar a encrypt_file o decrypt_file según args.command.
-    # - Imprimir el reporte y devolver 0.
-    raise NotImplementedError("Misión 4: main")
+    
+    key =  bytes.fromhex(args.key_hex)
+    if len(key) != KEY_SIZE:
+        raise ValueError("La llave debe de medir 32 bytes")
+    
+    if args.command == "encrypt":
+        output = encrypt_file(args.src, args.dst, key)
+    else:
+        output = decrypt_file(args.src, args.dst, key)
+    print_report(output)
+    return 0
 
 
 if __name__ == "__main__":
