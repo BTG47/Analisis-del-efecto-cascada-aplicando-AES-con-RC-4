@@ -1,18 +1,20 @@
-# AES-256-ECB — módulo de Bruno
+# AES-256 y cascada AES-RC4 — módulo de Bruno
 
 Componente AES del trabajo práctico basado en *AES-RC4 Encryption Technique to
 Improve File Security* (Atikah et al., 2019).
 
-Este repositorio contiene **solo la parte de Bruno**: cifrado y descifrado
-AES-256-ECB sobre `bytes`, con padding PKCS#7 y una ruta sin padding para los
-experimentos de Avalanche Effect. RC4 (José) y la medición del efecto avalancha
-(Diego) viven en sus propios módulos.
+Este repositorio contiene **la parte de Bruno**: cifrado y descifrado
+AES-256-ECB sobre `bytes`, con padding PKCS#7, una ruta sin padding para los
+experimentos de Avalanche Effect y la cascada AES-RC4 que compone los módulos
+del equipo. `rc4.py` e `integrity.py` son de José y se usan sin modificarlos;
+la medición del efecto avalancha es de Diego.
 
 ## Estado
 
-Completo y verificado: **95 tests pasando**. Incluye vectores oficiales
-FIPS-197 y NIST SP 800-38A, prueba de round-trip con archivos binarios reales y
-verificación de integridad por SHA-256.
+Completo y verificado: **182 tests pasando**. Incluye vectores oficiales
+FIPS-197 y NIST SP 800-38A para AES, vectores clásicos para RC4, round-trip con
+archivos binarios reales, cascada AES-RC4 y verificación de integridad por
+SHA-256 y BER.
 
 ## Requisitos
 
@@ -30,23 +32,25 @@ python -m pip install cryptography pytest
 
 ```mermaid
 flowchart TD
-    IN["data: bytes | bytearray | memoryview<br/>key: bytes (32)"] --> V["require_bytes(data) · require_key(key)<br/>TypeError / ValueError"]
-    V --> Q{"¿ruta con padding?"}
-    Q -- "aes_encrypt" --> PAD["pkcs7_pad<br/>agrega 1..16 bytes"]
-    Q -- "aes_encrypt_raw" --> RAW["exige len(data) % 16 == 0"]
-    PAD --> ENC["AES-256-ECB · encryptor()<br/>update() + finalize()"]
-    RAW --> ENC
-    ENC --> CT["criptograma"]
-    CT --> DEC["AES-256-ECB · decryptor()<br/>update() + finalize()"]
-    DEC --> Q2{"¿ruta con padding?"}
-    Q2 -- "aes_decrypt" --> UNPAD["pkcs7_unpad<br/>valida la cola completa"]
-    Q2 -- "aes_decrypt_raw" --> OUT["data original"]
-    UNPAD --> OUT
+    IN["data: bytes | bytearray | memoryview<br/>aes_key: 32 B · rc4_key: 1..256 B"] --> V["require_bytes · require_key<br/>TypeError / ValueError"]
+    V --> PAD["pkcs7_pad<br/>agrega 1..16 bytes"]
+    PAD --> AES["AES-256-ECB · encryptor()<br/>update() + finalize()"]
+    AES --> Q{"¿cascada?"}
+    Q -- "AES-RC4" --> RC4["RC4<br/>misma longitud"]
+    Q -- "solo AES" --> CT["criptograma"]
+    RC4 --> CT2["criptograma AES-RC4"]
+    CT --> DEC["AES-256-ECB · decryptor()"]
+    CT2 --> RC4D["RC4 inverso"]
+    RC4D --> DEC
+    DEC --> UNPAD["pkcs7_unpad<br/>valida la cola completa"]
+    UNPAD --> OUT["data original"]
 ```
 
-Las dos rutas comparten el mismo núcleo: `aes_encrypt` agrega padding antes de
-cifrar y `aes_decrypt` lo quita después de descifrar. `*_raw` no toca el
-padding y existe solo para comparar cifradores con el mismo denominador de bits.
+El núcleo es siempre AES: `aes_encrypt` agrega padding antes de cifrar y
+`aes_decrypt` lo quita después de descifrar. La cascada agrega RC4 **después**
+de AES al cifrar y **antes** de AES al descifrar, así que el padding viaja
+dentro de RC4. La ruta `*_raw` es la misma línea sin el paso de padding y exige
+que `len(data)` sea múltiplo de 16.
 
 ## Interfaz pública
 
@@ -56,36 +60,55 @@ from aes256 import (
     aes_encrypt_raw, aes_decrypt_raw,
     generate_key,
 )
+from hybrid import hybrid_encrypt, hybrid_decrypt, generate_rc4_key
 
-ct = aes_encrypt(data, key)          # PKCS#7, cualquier longitud
-pt = aes_decrypt(ct, key)            # ValueError si el relleno no es válido
-ct = aes_encrypt_raw(data, key)      # sin padding, len(data) % 16 == 0
-pt = aes_decrypt_raw(ct, key)        # ídem, para experimentos
-key = generate_key()                 # 32 bytes de os.urandom
+ct = aes_encrypt(data, key)              # PKCS#7, cualquier longitud
+pt = aes_decrypt(ct, key)                # ValueError si el relleno no es válido
+ct = aes_encrypt_raw(data, key)          # sin padding, len(data) % 16 == 0
+pt = aes_decrypt_raw(ct, key)            # ídem, para experimentos
+
+ct = hybrid_encrypt(data, aes_key, rc4_key)   # AES-256 y luego RC4
+pt = hybrid_decrypt(ct, aes_key, rc4_key)     # RC4 y luego AES
+
+key = generate_key()                     # 32 bytes de os.urandom
+rc4_key = generate_rc4_key(16)           # 1 a 256 bytes de os.urandom
 ```
 
-`key` debe medir **32 bytes** (AES-256). Todo entra y sale como `bytes`.
+Todo entra y sale como `bytes`. La clave AES debe medir **32 bytes**; la de RC4,
+entre **1 y 256**.
 
 | Situación | Excepción |
 |---|---|
 | `data` o `key` de tipo incorrecto (`str`, `int`, …) | `TypeError` |
-| Clave distinta de 32 bytes | `ValueError` |
-| `*_raw` con `len % 16 != 0` | `ValueError` |
+| Clave AES distinta de 32 bytes | `ValueError` |
+| Clave RC4 fuera de 1–256 bytes | `ValueError` |
+| `*_raw` o criptograma con `len % 16 != 0` | `ValueError` |
 | Criptograma truncado | `ValueError` |
 | Relleno PKCS#7 inválido (clave incorrecta o datos corruptos) | `ValueError` |
 
-Tamaños: `len(aes_encrypt(x)) == 16 * (len(x) // 16 + 1)`. Siempre se agrega al
-menos un byte de relleno; si `len(x)` ya es múltiplo de 16, se agrega un bloque
-completo.
+Tamaños:
+
+| Operación | Longitud de salida |
+|---|---|
+| `aes_encrypt` / `hybrid_encrypt` | `16 * (n // 16 + 1)` |
+| `aes_encrypt_raw` | `n` (exige `n % 16 == 0`) |
+| RC4 | `n` |
+
+Siempre se agrega al menos un byte de relleno; si `n` ya es múltiplo de 16, se
+agrega un bloque completo. RC4 no cambia longitudes, por eso el híbrido mide lo
+mismo que AES.
 
 ## Estructura
 
 ```
-aes256.py            # núcleo: AES-256-ECB y API pública
-padding.py           # PKCS#7 (pad / unpad validado)
-validation.py        # tipos y largo de clave
+aes256.py            # núcleo: AES-256-ECB y API pública (Bruno)
+padding.py           # PKCS#7 (pad / unpad validado) (Bruno)
+validation.py        # tipos y largo de clave (Bruno)
+hybrid.py            # cascada AES-RC4 (Bruno, compone los módulos del equipo)
+rc4.py               # RC4: KSA + PRGA + XOR (José)
+integrity.py         # BER, SHA-256 y comparación exacta (José)
 scripts/file_cli.py  # cifra/descifra archivos y reporta tamaños + SHA-256
-tests/               # pytest: vectores, API, raw y CLI
+tests/               # pytest: vectores, API, raw, cascada, RC4, integridad y CLI
 docs/DECISIONS.md    # decisiones, límites y evidencia de ejecución
 ```
 
@@ -101,38 +124,63 @@ ct = aes_encrypt(b"hola mundo", key)
 assert aes_decrypt(ct, key) == b"hola mundo"
 ```
 
+```python
+from hybrid import hybrid_encrypt, hybrid_decrypt, generate_rc4_key
+
+aes_key = generate_key()
+rc4_key = generate_rc4_key(16)
+ct = hybrid_encrypt(b"hola mundo", aes_key, rc4_key)
+assert hybrid_decrypt(ct, aes_key, rc4_key) == b"hola mundo"
+```
+
 ### Con archivos
 
 ```bash
 python scripts/file_cli.py generate-key
-python scripts/file_cli.py encrypt entrada.bin salida.enc --key-hex <64 hex>
-python scripts/file_cli.py decrypt salida.enc recuperado.bin --key-hex <64 hex>
+python scripts/file_cli.py generate-rc4-key --size 16
+
+python scripts/file_cli.py encrypt  entrada.bin salida.aes --key-hex <64 hex>
+python scripts/file_cli.py rc4-encrypt entrada.bin salida.rc4 --key-hex <32 hex>
+python scripts/file_cli.py hybrid-encrypt entrada.bin salida.hyb \
+    --aes-key-hex <64 hex> --rc4-key-hex <32 hex>
+
+python scripts/file_cli.py hybrid-decrypt salida.hyb recuperado.bin \
+    --aes-key-hex <64 hex> --rc4-key-hex <32 hex>
 ```
 
-Salida real con un archivo aleatorio de 1.000.000 bytes:
+Salida real con un archivo aleatorio de 1.000.000 bytes (cascada AES-RC4):
 
 ```
-archivo          /tmp/opencode/aescli/orig.bin
-tamano_origen    1000000
-tamano_destino   1000016
-sha256_origen    9b383b0167678478428c5e9300573389d77be7f54a952956ec5886f2b6009b6c
-sha256_destino   6eb91643f04d53fb8cb6b01f63e738e1a314ac916dd0fc8057b4d7e71646a4ed
-
-archivo          /tmp/opencode/aescli/orig.enc
-tamano_origen    1000016
-tamano_destino   1000000
-sha256_origen    6eb91643f04d53fb8cb6b01f63e738e1a314ac916dd0fc8057b4d7e71646a4ed
-sha256_destino   9b383b0167678478428c5e9300573389d77be7f54a952956ec5886f2b6009b6c
+archivo: /tmp/opencode/readme/orig.bin
+tamano_origen: 1000000
+tamano_destino: 1000016
+sha256_origen: 30aa7a92514af35d7fe71699db7335702d59c2f8eef70325ec7e33b4af5c4116
+sha256_destino: f6341c8493ffbed26c1a665a2ca8ad79c46076fc303bba95f9f0a91027f74528
 ```
 
-Los hashes se cruzan: lo que se cifró es exactamente lo que se descifró. El
-overhead es de 16 bytes (0,0016 %).
+```
+archivo: /tmp/opencode/readme/orig.hyb
+tamano_origen: 1000016
+tamano_destino: 1000000
+sha256_origen: f6341c8493ffbed26c1a665a2ca8ad79c46076fc303bba95f9f0a91027f74528
+sha256_destino: 30aa7a92514af35d7fe71699db7335702d59c2f8eef70325ec7e33b4af5c4116
+```
+
+Los hashes se cruzan y `cmp` confirma recuperación exacta; `check_integrity`
+devuelve `ber = 0.0`, `sha256_match = True` e `identical = True`.
+
+Tamaños de archivo, listos para la Tabla II del informe:
+
+| Archivo | Original | AES | RC4 | AES-RC4 |
+|---|---|---|---|---|
+| `orig.bin` | 1.000.000 | 1.000.016 | 1.000.000 | 1.000.016 |
 
 ## Tests
 
 ```bash
-python -m pytest -q          # 95 passed
-python -m pytest tests/test_aes_vectors.py -q   # solo vectores oficiales
+python -m pytest -q                                  # 182 passed
+python -m pytest tests/test_aes_vectors.py -q        # solo vectores AES
+python -m pytest tests/test_hybrid.py -q             # solo la cascada
 ```
 
 | Archivo | Qué cubre |
@@ -141,23 +189,38 @@ python -m pytest tests/test_aes_vectors.py -q   # solo vectores oficiales
 | `test_aes_vectors.py` | FIPS-197 C.3 y NIST SP 800-38A F.1.5 |
 | `test_api.py` | round-trip 0–1 MB, determinismo, errores |
 | `test_raw.py` | ruta sin padding y coherencia entre capas |
-| `test_file_cli.py` | reporte de tamaños/hashes y `main` |
+| `test_rc4_vectors.py` | vectores clásicos de RC4 (compuerta de integración) |
+| `test_integrity.py` | Hamming, BER y `check_integrity` |
+| `test_hybrid.py` | orden de la cascada, tamaños, errores e invariantes |
+| `test_file_cli.py` | reporte de tamaños/hashes y todos los subcomandos |
 
 ## Integración con el equipo
 
-- **Diego (Avalanche Effect):** comparar `cipher1` y `cipher2` con
-  `calculate_avalanche(c1, c2)`. Para cambios de clave sobre bloques completos,
-  `aes_encrypt_raw` garantiza el mismo tamaño de entrada que RC4.
-- **José (RC4):** contrato previsto `rc4_encrypt(data, key)` /
-  `rc4_decrypt(data, key)`. Cuando exista, la cascada se agrega en `hybrid.py`
-  sin tocar `aes256.py`:
-  ```python
-  rc4_encrypt(aes_encrypt(data, aes_key), rc4_key)   # cifrado
-  aes_decrypt(rc4_decrypt(data, rc4_key), aes_key)   # descifrado
-  ```
+**Diego (Avalanche Effect).** Con una sola clave modificada, la cascada hereda
+el efecto avalancha del cifrador cuya clave cambió; no lo amplifica:
+
+| Bit invertido | Relación | Medición (2.000 B) |
+|---|---|---|
+| Clave AES, RC4 fija | `dH(híbrido) == dH(AES)`, **exacta** | 8.039 == 8.039 |
+| Clave RC4, AES fija | aproximada, no exacta | 8.208 frente a 8.141 |
+
+La primera es exacta porque RC4 es `C = X ⊕ keystream` y el XOR con una
+constante preserva la distancia de Hamming. Por eso, si la fila "AES-RC4" de la
+Tabla III se mide invirtiendo la clave AES, la columna **duplica** la de AES.
+Conviene invertir un bit de la clave RC4 y discutir que la cascada no mejora la
+difusión, solo la conserva. `integrity.ber(c1, c2) * 100` es exactamente la
+ecuación (1) del enunciado, siempre que `|c1| == |c2|`.
+
+**José (RC4 e integridad).** `rc4.py` reproduce los tres vectores clásicos y se
+usa sin modificaciones. Una advertencia para su revisión: `_check_key` hace
+`bytes(key)`, así que `rc4_encrypt(data, 32)` acepta un `int` y usa una clave de
+32 ceros en silencio. `hybrid.py` lo bloquea en su frontera exigiendo `bytes`,
+pero el arreglo de fondo corresponde a su módulo.
 
 ## Advertencia
 
 ECB se usa con fines **exclusivamente académicos**: es determinista, revela
-patrones de bloques repetidos y no autentica. No usar para proteger datos
-reales. Los detalles y la justificación están en `docs/DECISIONS.md`.
+patrones de bloques repetidos y no autentica. La cascada tampoco autentica: una
+clave incorrecta se detecta solo de forma probabilística al validar el padding.
+No usar nada de esto para proteger datos reales. Los detalles y la
+justificación están en `docs/DECISIONS.md`.
