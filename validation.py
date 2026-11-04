@@ -16,16 +16,21 @@ def require_bytes(value: object, name: str = "data") -> bytes:
     Se aceptan los tipos "bytes-like": ``bytes``, ``bytearray`` y ``memoryview``.
     Cualquier otra cosa (``str`` incluido) es un error de tipo.
     """
-    # TODO Misión 1
-    # - isinstance(value, (bytes, bytearray, memoryview)) -> bytes(value)
-    # - si no, TypeError con un mensaje que diga qué se recibió.
-    raise NotImplementedError("Misión 1: require_bytes")
+
+    isPermitedType = isinstance(value, (bytes, bytearray, memoryview))
+
+    if not isPermitedType:
+        raise TypeError(f"{name} debe de ser bytes, no {type(value).__name__}")
+
+    return bytes(value)
 
 
 def require_key(key: object, size: int = KEY_SIZE) -> bytes:
     """Valida que la clave sea bytes y mida exactamente ``size`` bytes."""
-    # TODO Misión 1
-    # - Reutilizar require_bytes.
-    # - Si el largo no coincide, ValueError indicando esperado y recibido.
-    # - Devolver los bytes ya normalizados (no None).
-    raise NotImplementedError("Misión 1: require_key")
+
+    key = require_bytes(key, "key")
+    # Checar si no pasa del tamaño
+    if len(key) != size:
+        raise ValueError(f"key debe medir exactamente {size}, no es del tamaño esperado")
+
+    return key

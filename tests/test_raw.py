@@ -21,6 +21,15 @@ def test_raw_rechaza_largos_no_multiplos(bad_len):
         aes_decrypt_raw(b"x" * bad_len, KEY)
 
 
+@pytest.mark.parametrize("bad_len", [0, 1, 16, 24, 31, 33, 64])
+def test_raw_rechaza_claves_que_no_sean_de_32(bad_len):
+    """Una clave de 16 bytes haría que cryptography use AES-128 en silencio."""
+    with pytest.raises(ValueError):
+        aes_encrypt_raw(bytes(16), b"k" * bad_len)
+    with pytest.raises(ValueError):
+        aes_decrypt_raw(bytes(16), b"k" * bad_len)
+
+
 def test_raw_admite_entrada_vacia():
     assert aes_encrypt_raw(b"", KEY) == b""
     assert aes_decrypt_raw(b"", KEY) == b""

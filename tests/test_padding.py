@@ -35,19 +35,21 @@ def test_quince_bytes_agrega_uno():
 
 
 def test_unpad_acepta_cola_valida():
-    assert pkcs7_unpad(b"ab\x02\x02") == b"ab"
-    assert pkcs7_unpad(b"\x01") == b""
+    # 16 bytes: "ab" + 14 bytes de valor 14
+    assert pkcs7_unpad(b"ab" + b"\x0e" * 14) == b"ab"
+    # bloque entero de relleno: el mensaje original era vacío
+    assert pkcs7_unpad(b"\x10" * 16) == b""
 
 
 @pytest.mark.parametrize(
     "bad",
     [
         b"",  # vacío
-        b"abc\x00",  # largo de relleno 0 (inválido)
-        b"abc\x11",  # 0x11 = 17 > block_size
-        b"abc\x02",  # la cola no repite el valor 2
-        b"ab\x01\x02",  # cola inconsistente
         b"abc",  # longitud no múltiplo de 16
+        b"A" * 15 + b"\x00",  # n = 0 (inválido)
+        b"A" * 15 + b"\x11",  # 0x11 = 17 > block_size
+        b"A" * 15 + b"\x02",  # la cola no repite el valor 2
+        b"ab" + b"\x0c" * 12 + b"\x01\x02",  # último byte 2, cola 01 02
     ],
 )
 def test_unpad_rechaza_relleno_invalido(bad):
